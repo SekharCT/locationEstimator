@@ -21,4 +21,4 @@ def getSystemConfig():
 	# UE Location
 	ueLocation 					= []
 	# UE Azimuth wrt. North
-	ueAzimuthNorth
+	ueAzimuthNorth                          = []
