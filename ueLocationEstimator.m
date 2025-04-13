@@ -6,7 +6,7 @@ clc;clear;close all;
 % Satellite Velocity 
 sysConfig.satelliteVelocity       = 7800; % m/s
 % Satellite Distance from Cenre of Earth
-sysConfig.distSatelliteCentre     = 7000; % m
+sysConfig.distSatellite2Centre     = 7000; % m
 % Satellite Location 1
 sysConfig.satelliteLoc1           = [38.501889, -121.520728]; % [Latitude, Longitude]
 % Satellite Location 2
@@ -14,7 +14,7 @@ sysConfig.satelliteLoc2           = [38.596828, -121.531333]; % [Latitude, Longi
 
 % Variables regarding UE
 % Radius of Earth
-sysConfig.earthRadius             = 6400; %m
+sysConfig.earthRadius             = 6400; % m
 % User Location
 sysConfig.ueLocation              = [37.389108, -122.143192]; % [Latitude, Longitude] 
 % User Azimuth wrt North
@@ -40,22 +40,13 @@ sysConfig.satelliteAngleToNorth = getSatelliteAngletoNorth(sysConfig);
 %% Calculating Doppler
 sysConfig.observedDoppler = computeDoppler(sysConfig);
 
-%% Iterative algorithm
-while delta < deltaThreshold
+%% Fetching UE Location
+sysConfig.estimatedUeLocation = getUeLoc(sysConfig);
 
-    % Get the UE Location
-    sysConfig.newUeLoc = getUeLoc(sysConfig);
-
-    % Compute Angle between Norths
-    sysConfig.newAngleBetweenNorths = sysConfig.newUeLoc(2) - sysConfig.satelliteLoc2(2);
-
-    % Compute Delta
-    delta = sysConfig.newAngleBetweenNorths - sysConfig.oldAngleBetweenNorths;
-
-    % Updaing the Old Angle between the norths
-    sysConfig.oldAngleBetweenNorths = sysConfig.newAngleBetweenNorths;
-
-end % End of while loop
+%% Dispalying Results and Accuracy 
+[sysConfig.ueLocation, sysConfig.estimatedUeLocation, ...
+    sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
+                convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2))]
 
 %% Function Details
 % Name              - getUeLoc
@@ -64,22 +55,44 @@ end % End of while loop
 %                                         needed
 % Output Parameters - ueLocation        - User Location
 function ueLocation = getUeLoc(sysConfig)
+
+    % Achieving the distance of the Satellite(S) to User(U)
+    [sysConfig.distSatellite2User, sysConfig.angleBetnSCnCU] = getDistUser2Satellite(sysConfig);
+
+    % Angle between velocity vector projected on SCU Plane 
+    sysConfig.phi = sysConfig.angleBetnSCnCU + 90;
+
     % Projection Angle of Satellite Velocity and Plane containing User,
     % Satellite and Centre of Earth
-    satelliteProjectionAngle = sysConfig.satelliteAngleToNorth + ...
-                                sysConfig.oldAngleBetweenNorths + ...
-                                sysConfig.ueNorthAdjustedAoA;
+    sysConfig.satelliteProjectionAngle = acosd(sysConfig.observedDoppler/(sysConfig.satelliteVelocity*cosd(sysConfig.phi)));
 
-    % Achieving Angle of Depression from the satellie
-    sysConfig.phi = acos(sysConfig.observedDoppler/(sysConfig.satelliteVelocity*cosd(satelliteProjectionAngle)));
+    % sysConfig.satelliteProjectionAngle = sysConfig.satelliteAngleToNorth + ...
+    %                                         sysConfig.oldAngleBetweenNorths + ...
+    %                                         sysConfig.ueNorthAdjustedAoA;
+    % sysConfig.angleBetnCsuPlaneNorth = sysConfig.oldAngleBetweenNorths + ...
+    %                                         sysConfig.ueNorthAdjustedAoA;
+    sysConfig.angleBetnCsuPlaneNorth = sysConfig.satelliteProjectionAngle - ...
+                                            sysConfig.satelliteAngleToNorth;
 
-    % Achieving the distance of the Satellite to User
-    sysConfig.distSatellite2User = sqrt(sysConfig.earthRadius.^2 + sysConfig.distSatelliteCentre.^2 - ...
-                                2*sysConfig.earthRadius.*(sysConfig.distSatelliteCentre.*cos(sysConfig.phi)));
+    % Iterative algorithm to achieve Angles between Norths;
+    while delta < deltaThreshold
 
-    % Get UE Location using Distance, Angle of Depression and Angle of
-    % Arrival
-    ueLocation = computeUeCoordinates(sysConfig);
+        % UE Azimuth Angle wrt North
+        sysConfig.currUeFinalAzimuthAngle = sysConfig.angleBetnCsuPlaneNorth - sysConfig.oldAngleBetweenNorths;
+
+        % Get the UE Location
+        sysConfig.newUeLoc = computeUeCoordinates(sysConfig);
+
+        % Compute Angle between Norths
+        sysConfig.newAngleBetweenNorths = sysConfig.newUeLoc(2) - sysConfig.satelliteLoc2(2);
+
+        % Compute Delta
+        delta = sysConfig.newAngleBetweenNorths - sysConfig.oldAngleBetweenNorths;
+
+        % Updaing the Old Angle between the norths
+        sysConfig.oldAngleBetweenNorths = sysConfig.newAngleBetweenNorths;
+
+    end % End of while loop
 end
 
 
@@ -95,6 +108,37 @@ function ueLocation = computeUeCoordinates(sysConfig)
 end
 
 %% Function Details
+% Name              - getDistUser2Satellite
+% Details           - Computes Satellite's distance from User
+% Input Parameters  - sysConfig      - Structure with all the parameters
+%                                       needed
+% Output Parameters - distSatellite2User    - Satellite to User Distance
+%                   - angleBetnSCnCU        - Angle between line connecting 
+%                                             Satellite, Centre of Earth and 
+%                                             Satellite, User in Satellite, User 
+%                                             and Centre of Earth Plane.
+function [distSatellite2User, angleBetnSCnCU] = getDistUser2Satellite(sysConfig)
+
+    % Converting Latitudes and Longitudes to Cartesian Coordinates
+    earthCentreCoordinate = [0, 0, 0];
+    satelliteCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
+    ueCoordinates = convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation);
+
+    % Distance between each points
+    % S - Satellite, U - User, C - Centre of Earth
+    SC = sqrt(sum((satelliteCoordinates - earthCentreCoordinate).^2));
+    UC = sqrt(sum((ueCoordinates - earthCentreCoordinate).^2));
+
+    % We know SC, UC, and angle between UC, SU (angleOfElevation)
+    % SU can be solved using the equation solving:
+    % SU^2 - 2*SU*UC*cos(angleOfElevation) + UC^2 - SC^2 = 0
+    % SU = (2*UC*cosd(angleOfElevation) - sqrt(((2*UC*cosd(angleOfElevation))^2) - ...
+    %           4*((UC^2)-(SC^2))))/2
+    distSatellite2User = UC*cosd(sysConfig.phi) - sqrt(((UC*cosd(sysConfig.phi)).^2) - ...
+                            ((UC.^2) - (SC.^2)));
+end
+
+%% Function Details
 % Name              - getSatelliteAngletoNorth
 % Details           - Computes Satellite's velocity vector's angle to it's
 %                     North
@@ -102,9 +146,21 @@ end
 %                                       needed
 % Output Parameters - satelliteAngletoNorth    - Angle of Arrival
 function satelliteAngletoNorth = getSatelliteAngletoNorth(sysConfig)
+    % Consider the Locations to fetch the angle
+    velocityVectorStart = sysConfig.satelliteLoc1;
+    velocityVectorEnd = sysConfig.satelliteLoc2;
+    northAxisStart = sysConfig.satelliteLoc1;
+    northAxisEnd = [sysConfig.satelliteLoc2(1), sysConfig.satelliteLoc1(2)];
 
+    % Converting to Cartesian Vectors
+    velocityVector = convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorEnd) - ...
+                        convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorStart);
+    northAxisVector = convLatLong2Cartesian(sysConfig.distSatellite2Centre, northAxisEnd) - ...
+                        convLatLong2Cartesian(sysConfig.distSatellite2Centre, northAxisStart);
+
+    % Angle between the vectors
+    satelliteAngletoNorth = acosd(sum(velocityVector.*northAxisVector)/(sqrt((sum(velocityVector.^2))*(sum(northAxisVector.^2)))))
 end
-
 
 %% Function Details
 % Name              - computeDoppler
@@ -123,7 +179,19 @@ end
 %                                       needed
 % Output Parameters - observedAoA    - Angle of Arrival
 function observedAoA = computeAoA(sysConfig)
+    % Converting Latitudes and Longitudes to Cartesian Coordinates
+    earthCentreCoordinate = [0, 0, 0];
+    satelliteCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
+    ueCoordinates = convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation);
 
+    % Distance between each points
+    % S - Satellite, U - User, C - Centre of Earth
+    SC = sqrt(sum((satelliteCoordinates - earthCentreCoordinate).^2));
+    UC = sqrt(sum((ueCoordinates - earthCentreCoordinate).^2));
+    SU = sqrt(sum((satelliteCoordinates - ueCoordinates).^2));
+
+    % Angle of Arrival
+    observedAoA = acosd(((UC.^2) + (SU.^2) - (SC.^2))./(2*(UC.*SU)));
 end
 
 
