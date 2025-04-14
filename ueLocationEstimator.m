@@ -20,6 +20,11 @@ sysConfig.ueLocation              = [37.389108, -122.143192]; % [Latitude, Longi
 % User Azimuth wrt North
 sysConfig.ueAzimuthWN             = 30; % Degrees towards East
 
+% Movement Sign of SNR
+% +1 -> Satellite Going Away or SNR historical trend for this satellite is dereasing.
+% -1 -> Satellite Coming Towards or SNR historical trend for this satellite is increasing.
+sysConfig.movementSign            = +1;
+
 % AoA Computation
 sysConfig.genieBasedAoAComp       = true;
 
@@ -60,7 +65,7 @@ function ueLocation = getUeLoc(sysConfig)
     [sysConfig.distSatellite2User, sysConfig.angleBetnSCnCU] = getDistUser2Satellite(sysConfig);
 
     % Angle between velocity vector projected on SCU Plane 
-    sysConfig.phi = sysConfig.angleBetnSCnCU + 90;
+    sysConfig.phi = 90 + sysConfig.movementSign*sysConfig.angleBetnSCnCU;
 
     % Projection Angle of Satellite Velocity and Plane containing User,
     % Satellite and Centre of Earth
@@ -103,8 +108,48 @@ end
 % Input Parameters  - sysConfig      - Structure with all the parameters
 %                                       needed
 % Output Parameters - ueLocation     - User's Location Coordinates
-function ueLocation = computeUeCoordinates(sysConfig)
+function  = computeUeCoordinates(sysConfig)
+    
+    % Sign of AoA specified tthe direction of CUS lane with Velocity Vector
+    % If +ve -> UE is considered to be on the right of Satellite and vice versa
+    if sysConfig.observedAoA > 0
+        leftRightSign = +1;
+    else
+        leftRightSign = -1;
+    end
+    
+    % Direction of velocity projected on CUS Plane
+    velocityVector = convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorEnd) - ...
+                        convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorStart);
+    tangentialVelocityVecPlane = convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorStart);
+    velocityPerpVectorInCusPlane = [tangentialVelocityVecPlane(2)*velocityVector(3) - ...
+                                        velocityVector(2)*tangentialVelocityVecPlane(2), ...
+                                        tangentialVelocityVecPlane(3)*velocityVector(1) - ...
+                                        velocityVector(3)*tangentialVelocityVecPlane(1), ...
+                                        tangentialVelocityVecPlane(1)*velocityVector(2) - ...
+                                        velocityVector(1)*tangentialVelocityVecPlane(2)];
+    velocityVectorProjectionInCusPlane = velocityVector*cosd(leftRightSign*sysConfig.satelliteProjectionAngle) + ...
+                    sind(leftRightSign*sysConfig.satelliteProjectionAngle)*...
+                    velocityPerpVectorInCusPlane./sqrt(sum(velocityPerpVectorInCusPlane.^2));
 
+    % Direction on projected velocity in the path direction
+    satelliteCentreVector = tangentialVelocityVecPlane;
+    orthoCusPlaneVector = [satelliteCentreVector(2)*velocityVectorProjectionInCusPlane(3) - ...
+                            velocityVectorProjectionInCusPlane(2)*satelliteCentreVector(2), ...
+                            satelliteCentreVector(3)*velocityVectorProjectionInCusPlane(1) - ...
+                            velocityVectorProjectionInCusPlane(3)*satelliteCentreVector(1), ...
+                            satelliteCentreVector(1)*velocityVectorProjectionInCusPlane(2) - ...
+                            velocityVectorProjectionInCusPlane(1)*satelliteCentreVector(2)];
+    pathDirection = velocityVectorProjectionInCusPlane*cosd(sysConfig.phi) + ...
+                        sind(sysConfig.phi)*orthoCusPlaneVector./sqrt(sum(orthoCusPlaneVector.^2));
+    pathDirectionUnitNorm = pathDirection./sqrt(sum(pathDirection.^2));
+
+    % Finding the UE Location in the path direction from Satellite Location
+    ueLocationCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, velocityVectorStart) + ...
+                               pathDirectionUnitNorm*sysConfig.distSatellite2User;
+
+    % Converting UE Location to Latitude and Longitude Co-ordinates
+    ueLocation = convCartesian2LatLong(sysConfig.earthRadius, ueLocationCoordinates);
 end
 
 %% Function Details
@@ -170,6 +215,51 @@ end
 % Output Parameters - observedDoppler   - Observed Doppler
 function observedDoppler = computeDoppler(sysConfig)
 
+    % If using Genie based Doppler Computation
+    if sysConfig.genieBasedDopplerComp
+        % Identifying the plane of Satellite (S), Centre of Earth (C), and User (U)
+        % Converting Latitudes and Longitudes to Cartesian Coordinates
+        earthCentreCoordinate = [0, 0, 0];
+        satelliteCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
+        ueCoordinates = convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation);
+
+        % Given coordinates, plane being Ax+By+Cz+D=0
+        % vector v1 = satelliteCoordinates - earthCentreCoordinate, v2 = ueCoordinates - earthCentreCoordinate
+        % (A, B, C) = v1 x v2 (x => Cross Product)
+        v1 = satelliteCoordinates - earthCentreCoordinate;
+        v2 = ueCoordinates - earthCentreCoordinate;
+        A = v1(2)*v2(3) - v2(2)*v1(3);
+        B = v1(3)*v2(1) - v2(3)*v1(1);
+        C = v1(1)*v2(2) - v2(1)*v1(2);
+        % Since the plane should pass through Origin (defined from earthCentreCoordinate), D = 0
+        D = -A*earthCentreCoordinate(1) - B*earthCentreCoordinate(2) - C*earthCentreCoordinate(3);
+
+        % Projection angle of velocity vector and CUS Plane
+        velocityVector = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc2) - ...
+                            convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
+        cusPlaneVector = [A, B, C];
+        velocityProjectionAngleOntoCusPlane = asind(sum(velocityVector.*cusPlaneVector)/(sqrt(...
+                                                    (sum(velocityVector.^2))*(sum(cusPlaneVector.^2)))));
+
+        % Projection of Velocity Vector onto CUS Plane
+        velocityCusPlaneProjection = velocityVector - ...
+                            cusPlaneVector.*(sum(velocityVector.*cusPlaneVector)/sum(cusPlaneVector.^2));
+
+        % Angle between Satellite, User and Projected Velocity Vector
+        pathVector = ueCoordinates - satelliteCoordinates;
+        angleOfDepression = acosd(sum(pathVector.*velocityCusPlaneProjection)/(sqrt(...
+                                    (sum(pathVector.^2))*(sum(velocityCusPlaneProjection.^2)))));
+        velocityOnPathProjectionVector = pathVector.*(sum(velocityCusPlaneProjection.*pathVector)/sum(pathVector.^2));
+
+        % Observed Doppler
+        observedDoppler = sqrt(sum(velocityOnPathProjectionVector.^2));
+
+    else
+
+        % Practical Doppler Computation
+        observedDoppler = 20; % Dummy Code
+
+    end
 end
 
 %% Function Details
@@ -179,19 +269,28 @@ end
 %                                       needed
 % Output Parameters - observedAoA    - Angle of Arrival
 function observedAoA = computeAoA(sysConfig)
-    % Converting Latitudes and Longitudes to Cartesian Coordinates
-    earthCentreCoordinate = [0, 0, 0];
-    satelliteCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
-    ueCoordinates = convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation);
 
-    % Distance between each points
-    % S - Satellite, U - User, C - Centre of Earth
-    SC = sqrt(sum((satelliteCoordinates - earthCentreCoordinate).^2));
-    UC = sqrt(sum((ueCoordinates - earthCentreCoordinate).^2));
-    SU = sqrt(sum((satelliteCoordinates - ueCoordinates).^2));
+    % Genie AoA
+    if sysConfig.genieBasedAoAComp
+        % Converting Latitudes and Longitudes to Cartesian Coordinates
+        earthCentreCoordinate = [0, 0, 0];
+        satelliteCoordinates = convLatLong2Cartesian(sysConfig.distSatellite2Centre, sysConfig.satelliteLoc1);
+        ueCoordinates = convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation);
 
-    % Angle of Arrival
-    observedAoA = acosd(((UC.^2) + (SU.^2) - (SC.^2))./(2*(UC.*SU)));
+        % Distance between each points
+        % S - Satellite, U - User, C - Centre of Earth
+        SC = sqrt(sum((satelliteCoordinates - earthCentreCoordinate).^2));
+        UC = sqrt(sum((ueCoordinates - earthCentreCoordinate).^2));
+        SU = sqrt(sum((satelliteCoordinates - ueCoordinates).^2));
+
+        % Angle of Arrival
+        observedAoA = acosd(((UC.^2) + (SU.^2) - (SC.^2))./(2*(UC.*SU)));
+    else
+
+        % Practical AoA Estimation
+        observedAoA = 30; % Dummy Code
+
+    end
 end
 
 
