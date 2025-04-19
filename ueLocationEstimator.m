@@ -101,12 +101,13 @@ function ueLocation = computeUeCoordinates(sysConfig)
                                         velocityVector(3)*tangentialVelocityVecPlane(1), ...
                                         tangentialVelocityVecPlane(1)*velocityVector(2) - ...
                                         velocityVector(1)*tangentialVelocityVecPlane(2)];
+    if sysConfig.satelliteProjectionAngle > 90
+        sysConfig.satelliteProjectionAngle = sysConfig.satelliteProjectionAngle - 180;
+    end
+
     velocityVectorProjectionInCusPlane = velocityVector*cosd(leftRightSign*sysConfig.satelliteProjectionAngle) + ...
                     sind(leftRightSign*sysConfig.satelliteProjectionAngle)*...
                     velocityPerpVectorInCusPlane./sqrt(sum(velocityPerpVectorInCusPlane.^2));
-
-    %%%TODOs (Fix)
-    velocityVectorProjectionInCusPlane = velocityVectorProjectionInCusPlane*-1;
 
     % Direction on projected velocity in the path direction
     satelliteCentreVector = tangentialVelocityVecPlane;
@@ -131,6 +132,11 @@ function ueLocation = computeUeCoordinates(sysConfig)
                                pathDirectionUnitNorm*sysConfig.distSatellite2User;
 
     % Converting UE Location to Latitude and Longitude Co-ordinates
+    
+    % [convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation), ueLocationCoordinates]
+    % [sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
+    %             ueLocationCoordinates).^2))]
+
     ueLocation = convCartesian2LatLong(sysConfig.earthRadius, ueLocationCoordinates);
 end
 
@@ -168,7 +174,8 @@ function [distSatellite2User, angleBetnSCnSU] = getDistUser2Satellite(sysConfig)
                             ((UC.^2) - (SC.^2))));
 
     % Angle between SC and SU %%%TODOs (Fix)
-    angleBetnSCnSU = sysConfig.angleOfDepressionGenie-90;%acosd(((SC.^2) + (distSatellite2User.^2) - (UC.^2))/(2*(SC.*distSatellite2User)));
+    angleBetnSCnSU = acosd(((SC.^2) + (distSatellite2User.^2) - (UC.^2))/(2*(SC.*distSatellite2User)));
+    % angleBetnSCnSU = sysConfig.angleOfDepressionGenie-90;
 end
 
 %% Function Details
@@ -217,9 +224,11 @@ function sysConfig = computeDoppler(sysConfig)
         % Projection of Velocity Vector onto CUS Plane
         velocityCusPlaneProjection = velocityVector - ...
                             cusPlaneNormVector.*(sum(velocityVector.*cusPlaneNormVector)/sum(cusPlaneNormVector.^2));
+        velocityCusPlaneProjection/sqrt(sum(velocityCusPlaneProjection.^2))
 
         % Angle between Satellite, User and Projected Velocity Vector
         pathVector = ueCoordinates - satelliteCoordinates;
+        pathVector./sqrt(sum(pathVector.^2))
         sysConfig.angleOfDepressionGenie = acosd(sum(pathVector.*velocityCusPlaneProjection)/(sqrt(...
                                     (sum(pathVector.^2))*(sum(velocityCusPlaneProjection.^2)))));
         velocityOnPathProjectionVector = pathVector.*(sum(velocityCusPlaneProjection.*pathVector)/sum(pathVector.^2));
@@ -297,8 +306,8 @@ function latLongPair = convCartesian2LatLong(radius, cartesianCoordinates)
 
     % Filling the coordinates
     latitude = asind(cartesianCoordinates(3)/radius);
-    %%%TODOs (Fix)
-    longitude = -1*acosd(cartesianCoordinates(1)/radius/cosd(latitude));
+    currSign = sign(asind(cartesianCoordinates(2)/radius/cosd(latitude)));
+    longitude = currSign*acosd(cartesianCoordinates(1)/radius/cosd(latitude));
 
     % Putting them together
     latLongPair = [latitude, longitude];
