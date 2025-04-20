@@ -61,6 +61,10 @@ for simIdx = 1 : numSimulations
     % [sysConfig.ueLocation, sysConfig.estimatedUeLocation, ...
     %     sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
     %                 convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2))]
+
+    if imag(mseErrorSet(simIdx)) ~= 0
+        test = 1;
+    end
 end % End of loop on Simulations
 mean(mseErrorSet)
 
@@ -185,7 +189,13 @@ function [distSatellite2User, angleBetnSCnSU] = getDistUser2Satellite(sysConfig)
     end
 
     % Angle between SC and SU
-    angleBetnSCnSU = acosd(max(min(((SC.^2) + (distSatellite2User.^2) - (UC.^2))/(2*(SC.*distSatellite2User)), 1), -1));
+    angleBetnSCnSURaw = ((SC.^2) + (distSatellite2User.^2) - (UC.^2))/(2*(SC.*distSatellite2User));
+    angleBetnSCnSU = acosd(max(min(angleBetnSCnSURaw, 1), -1));
+
+    % Update the distance for error resilience
+    if abs(angleBetnSCnSURaw - cosd(angleBetnSCnSU)) > 1e-3
+        distSatellite2User = SC*cosd(angleBetnSCnSU) + sqrt((UC.^2) - ((SC*cosd(angleBetnSCnSU)).^2));
+    end
 
 end
 
@@ -338,9 +348,9 @@ end
 function latLongPair = convCartesian2LatLong(radius, cartesianCoordinates)
 
     % Filling the coordinates
-    latitude = asind(cartesianCoordinates(3)/radius);
+    latitude = asind(max(min(cartesianCoordinates(3)/radius, 1), -1));
     currSign = sign(asind(cartesianCoordinates(2)/radius/cosd(latitude)));
-    longitude = currSign*acosd(cartesianCoordinates(1)/radius/cosd(latitude));
+    longitude = currSign*acosd(max(min(cartesianCoordinates(1)/radius/cosd(latitude), 1), -1));
 
     % Putting them together
     latLongPair = [latitude, longitude];
