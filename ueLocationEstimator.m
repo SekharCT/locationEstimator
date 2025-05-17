@@ -20,9 +20,12 @@ sysConfig.ueLocation              = [39.709380, -121.100728];% [39.195778, -123.
 % User Azimuth wrt North
 sysConfig.ueAzimuthWN             = 30; % Degrees towards East
 
+% Carrier Frequency
+sysConfig.carrierFreq             = 11.72e9; % Hz
+
 % Synchronization
 sysConfig.synchronized            = false;
-sysConfig.errorPercInToA          = 0.0; % Ratio : [0-1]
+sysConfig.errorBiasInToA          = 0.0; % Percentage
 
 % Movement Sign of SNR (shall be reassigned to meet the requirements)
 % +1 -> Satellite Going Away or SNR historical trend for this satellite is dereasing.
@@ -31,46 +34,89 @@ sysConfig.movementSign            = +1;
 
 % AoA Computation
 sysConfig.genieBasedAoAComp       = true;
-sysConfig.errorPercInAoA          = 0.0; % Ratio : [0-1]
+sysConfig.errorBiasInAoA          = 0.0; % Degree
 
 % Doppler Computation
 sysConfig.genieBasedDopplerComp   = true;
-sysConfig.errorPercInDoppler      = 0.0; % Ratio : [0-1]
+sysConfig.errorPercInDoppler      = 0.0; % Percentage
+sysConfig.maxDopplerError         = 600; % Hz
 
-%% Looping on Simulations
-numSimulations = 10000;
-mseErrorSet = zeros(1, numSimulations);
-for simIdx = 1 : numSimulations
-    % UE Location
-    sysConfig.ueLocation              = [32 + 10*rand(1), -124 + 4*rand(1)];
+% Loop on Dopplers
+snrArray = 0 :2/3 : 20;
+% consDopplerPercChanges = 0.0:0.0002:0.006;
+% consAoABiasChanges = 0.0:0.0033:0.2;
+consDopplerPercChanges = [sqrt(2e-3):(sqrt(6e-4)-sqrt(2e-3))/7:sqrt(6e-4), ...
+                            sqrt(6e-4)+((sqrt(5.5e-4)-sqrt(6e-4))/8):(sqrt(5.5e-4)-sqrt(6e-4))/8:sqrt(5.5e-4), ...
+                            sqrt(5.5e-4)+((sqrt(5e-4)-sqrt(5.5e-4))/15):(sqrt(5e-4)-sqrt(5.5e-4))/15:sqrt(5e-4)]./20;
+consAoABiasChanges = [0.18:(0.157-0.18)/7:0.157, ...
+                        0.157+((0.125-0.157)/8):(0.125-0.157)/8:0.125, ...
+                        0.125+((0.119-0.125)/8):(0.119-0.125)/8:0.119, ...
+                        0.119+((0.116-0.119)/7):(0.116-0.119)/7:0.116]/1.3;
+mseDopplers = zeros(1, length(consDopplerPercChanges));
+meanDopplers = zeros(1, length(consDopplerPercChanges));
+for currDopplerPercChangeIdx = 1 : length(consDopplerPercChanges)
+% for currDopplerPercChangeIdx = 1 : length(consAoABiasChanges)
 
-    % Calculating AoA
-    sysConfig = computeAoA(sysConfig);
+    sysConfig.errorPercInDoppler = consDopplerPercChanges(currDopplerPercChangeIdx);
+    sysConfig.errorBiasInAoA = consAoABiasChanges(currDopplerPercChangeIdx);
+
+    %% Looping on Simulations
+    numSimulations = 100000;
+    mseErrorSet = zeros(1, numSimulations);
+    dopplerSet = zeros(1, numSimulations);
+    mErrDoppler = zeros(1, numSimulations);
+    for simIdx = 1 : numSimulations
+        % UE Location
+        sysConfig.ueLocation              = [32 + 10*rand(1), -124 + 4*rand(1)];
     
-    % Calculating Doppler
-    sysConfig = computeDoppler(sysConfig);
+        % Calculating AoA
+        sysConfig = computeAoA(sysConfig);
+        
+        % Calculating Doppler
+        sysConfig = computeDoppler(sysConfig);
+        
+        % Fetching UE Location
+        sysConfig = getUeLoc(sysConfig);
     
-    % Fetching UE Location
-    sysConfig = getUeLoc(sysConfig);
-
-    % MSE Pooling
-    mseErrorSet(simIdx) = sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
-                convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2));
+        % MSE Pooling
+        mseErrorSet(simIdx) = sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
+                    convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2));
+        
+        dopplerSet(simIdx) = sysConfig.observedDopplerGenie;
+        mErrDoppler(simIdx) = sysConfig.errorDoppler;
     
-    % % Dispalying Results and Accuracy 
-    % [sysConfig.ueLocation, sysConfig.estimatedUeLocation, ...
-    %     sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
-    %                 convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2))]
+        % % Dispalying Results and Accuracy 
+        % [sysConfig.ueLocation, sysConfig.estimatedUeLocation, ...
+        %     sqrt(sum((convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.ueLocation) - ...
+        %                 convLatLong2Cartesian(sysConfig.earthRadius, sysConfig.estimatedUeLocation)).^2))]
 
-    if imag(mseErrorSet(simIdx)) ~= 0
-        test = 1;
-    end
-end % End of loop on Simulations
-mean(mseErrorSet)
+    end % End of loop on Simulations
+    mseDopplers(currDopplerPercChangeIdx) = mean(mseErrorSet);
+    meanDopplers(currDopplerPercChangeIdx) = mean(mErrDoppler);
+
+end
+
+% plot(consDopplerPercChanges, mseDopplers, "LineWidth", 2);
+% data = sortrows([meanDopplers.', mseDopplers.']);
+% plot(data(:,1), data(:,2), "LineWidth", 2);
+% grid on;
+% xlabel("Doppler Error (Hz)");
+% title("Position Error vs. Doppler Error");
+% xlabel("Doppler % Change for errors");
+% title("Position Error vs. Doppler % Error");
+% plot(consAoABiasChanges, mseDopplers, "LineWidth", 2);
+% grid on;
+% xlabel("AoA Change for errors");
+% title("Position Error vs. AoA Error");
+plot(snrArray, mseDopplers, "LineWidth", 2);
+grid on;
+xlabel("SNR (dB)");
+title("Position Error vs. SNR (dB)");
+ylabel("Mean Position Error (Km)");
 
 %% Function Details
 % Name              - getUeLoc
-% Details           - Computes User Location using Iterative procedure
+% Details        s   - Computes User Location using Iterative procedure
 % Input Parameters  - sysConfig         - Structure with all the parameters
 %                                         needed
 % Output Parameters - ueLocation        - User Location
@@ -84,7 +130,7 @@ function ueLocation = getUeLoc(sysConfig)
 
     % Projection Angle of Satellite Velocity and Plane containing User,
     % Satellite and Centre of Earth
-    sysConfig.satelliteProjectionAngle = acosd(max(min(sysConfig.observedDoppler/(sysConfig.satelliteVelocity*cosd(sysConfig.phi)), 1), -1));
+    sysConfig.satelliteProjectionAngle = acosd(max(min(sysConfig.observedDoppler*3e8/(sysConfig.satelliteVelocity*sysConfig.carrierFreq*cosd(sysConfig.phi)), 1), -1));
 
     % Get the UE Location
     sysConfig.newUeLoc = computeUeCoordinates(sysConfig);
@@ -254,10 +300,11 @@ function sysConfig = computeDoppler(sysConfig)
         velocityOnPathProjectionVector = pathVector.*(sum(velocityCusPlaneProjection.*pathVector)/sum(pathVector.^2));
 
         % Observed Doppler
-        sysConfig.observedDopplerGenie = sqrt(sum(velocityOnPathProjectionVector.^2));
+        sysConfig.observedDopplerGenie = sqrt(sum(velocityOnPathProjectionVector.^2))*sysConfig.carrierFreq/3e8;
 
         % Error Injection
-        sysConfig.observedDoppler = (1+(1-2*randi([1, 1]))*sysConfig.errorPercInDoppler)*...
+        sysConfig.errorDoppler = min(sysConfig.errorPercInDoppler*sysConfig.observedDopplerGenie, sysConfig.maxDopplerError);
+        sysConfig.observedDoppler = (1-2*randi([0, 1]))*sysConfig.errorDoppler + ...
                                         sysConfig.observedDopplerGenie;
     else
 
@@ -306,9 +353,9 @@ function sysConfig = computeAoA(sysConfig)
         sysConfig.observedAoAGenie = sideOfUe*(acosd(((UC.^2) + (SU.^2) - (SC.^2))./(2*(UC.*SU))) - 90);
 
         % Error Injection
-        sysConfig.observedAoA = (1+(1-2*randi([0, 1]))*sysConfig.errorPercInAoA)*...
+        sysConfig.observedAoA = (1-2*randi([0, 1]))*sysConfig.errorBiasInAoA + ...
                                         sysConfig.observedAoAGenie;
-        sysConfig.timeOfArrival = (1+(1-2*randi([0, 1]))*sysConfig.errorPercInToA)*...
+        sysConfig.timeOfArrival = (1-2*randi([0, 1]))*sysConfig.errorBiasInToA + ...
                                         sysConfig.timeOfArrivalGenie;
     else
 
